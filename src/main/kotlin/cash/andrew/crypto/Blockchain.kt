@@ -1,18 +1,29 @@
 package cash.andrew.crypto
 
 import cash.andrew.crypto.model.Block
+import cash.andrew.crypto.model.ChainResponse
 import cash.andrew.crypto.model.Transaction
+import io.micronaut.core.type.Argument
+import io.micronaut.http.HttpRequest
+import io.micronaut.http.client.RxHttpClient
 import okio.ByteString.Companion.toByteString
+import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
 import java.io.ObjectOutputStream
 import javax.inject.Singleton
 
 @Singleton
-open class Blockchain {
-    val chain = linkedSetOf<Block>()
-    private val currentTransactions = linkedSetOf<Transaction>()
+open class Blockchain(
+    private val httpClient: RxHttpClient
+) {
+    private val logger = LoggerFactory.getLogger(Blockchain::class.java)
 
+    val chain = linkedSetOf<Block>()
     val lastBlock: Block get() = chain.last()
+
+    val nodes = linkedSetOf<String>()
+
+    private val currentTransactions = linkedSetOf<Transaction>()
 
     init {
         // create the genesis block
@@ -81,6 +92,66 @@ open class Blockchain {
         }
 
         return proof
+    }
+
+    /**
+     * Add a new node to the list of nodes.
+     */
+    fun registerNode(address: String) {
+        nodes.add(address)
+    }
+
+    /**
+     * Determines if a given blockchain is valid.
+     */
+    fun validChain(chain: Set<Block>): Boolean {
+        var lastBlock = chain.first()
+        chain.drop(1).forEach { block ->
+            if (block.previousHash != hash(lastBlock)) return false
+            if (validProof(lastBlock.proof, block.proof)) return false
+
+            lastBlock = block
+        }
+
+        return true
+    }
+
+    /**
+     * Resolve any conflicts in our chain with the longest on the network.
+     * @return true if our chain was replaced false if not.
+     */
+    fun resolveConflicts(): Boolean {
+        val neighbours = nodes
+
+        val maxLength = chain.size
+        var newChain: Set<Block>? = null
+
+        neighbours.forEach {
+            runCatching {
+                val response = httpClient.retrieve(
+                    HttpRequest.GET<Any>("$it/chain"),
+                    Argument.of(ChainResponse::class.java)
+                ).singleOrError()
+                    .blockingGet()
+
+                if (response.length > maxLength && validChain(response.chain)) {
+                    chain.clear()
+                    chain.addAll(response.chain)
+                    newChain = response.chain
+                }
+            }.onFailure { e ->
+                logger.error("Error connecting to node $it", e)
+            }
+        }
+
+        val nc = newChain
+        if (nc != null) {
+            chain.clear()
+            chain.addAll(nc)
+            return true
+        }
+
+        return false
     }
 
     /**

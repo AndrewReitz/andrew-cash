@@ -1,5 +1,7 @@
 package cash.andrew.crypto
 
+import cash.andrew.crypto.model.ChainResponse
+import cash.andrew.crypto.model.RegisterNodeRequest
 import cash.andrew.crypto.model.TransactionRequest
 import io.micronaut.http.HttpResponse
 import io.micronaut.http.MediaType
@@ -20,7 +22,7 @@ class BlockchainController @Inject constructor(
 
     @Post("/transactions/new")
     @Produces(MediaType.APPLICATION_JSON)
-    suspend fun newTransaction(transaction: TransactionRequest): MutableHttpResponse<Map<String, String>> {
+    suspend fun newTransaction(transaction: TransactionRequest): HttpResponse<Map<String, String>> {
         val index = blockchain.newTransaction(
             sender = transaction.sender,
             recipient = transaction.recipient,
@@ -36,7 +38,7 @@ class BlockchainController @Inject constructor(
 
     @Get("/mine")
     @Produces(MediaType.APPLICATION_JSON)
-    suspend fun mine(): MutableHttpResponse<Map<String, Any>>? {
+    suspend fun mine(): HttpResponse<Map<String, Any>>? {
         val lastBlock = blockchain.lastBlock
         val lastProof = lastBlock.proof
 
@@ -69,11 +71,43 @@ class BlockchainController @Inject constructor(
 
     @Get("/chain")
     @Produces(MediaType.APPLICATION_JSON)
-    suspend fun chain(): MutableHttpResponse<Map<String, Any>> {
+    suspend fun chain(): HttpResponse<ChainResponse> {
+        return HttpResponse.ok(
+            ChainResponse(
+                chain = blockchain.chain,
+                length = blockchain.chain.size
+            )
+        )
+    }
+
+    @Post("/nodes/register")
+    @Produces(MediaType.APPLICATION_JSON)
+    suspend fun register(request: RegisterNodeRequest): HttpResponse<Any> {
+        if (request.nodes.isEmpty()) {
+            return HttpResponse.badRequest("Error: Please supply a valid list of nodes")
+        }
+
+        request.nodes.forEach {
+            blockchain.registerNode(it)
+        }
+
         return HttpResponse.ok(
             mapOf(
-                "chain" to blockchain.chain,
-                "length" to blockchain.chain.size
+                "message" to "New nodes added",
+                "total_nodes" to blockchain.nodes.size
+            )
+        )
+    }
+
+    @Get("/nodes/resolve")
+    @Produces(MediaType.APPLICATION_JSON)
+    suspend fun consensus(): HttpResponse<Map<String, Any>> {
+        val replaced = blockchain.resolveConflicts()
+
+        return HttpResponse.ok(
+            mapOf(
+                "message" to if (replaced) "Our chain was replaced" else "Our chain is authoritative",
+                "chain" to blockchain.chain
             )
         )
     }
